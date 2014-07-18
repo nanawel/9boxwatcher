@@ -38,8 +38,6 @@ class Neufbox4 {
 	protected $_timeout = self::REQUEST_TIMEOUT;
 	/** @var string */
 	protected $_sessionId;
-	/** @var string */
-	protected $_cookie;
 	
 	/** @var boolean */
 	public $debug = false;
@@ -67,6 +65,10 @@ class Neufbox4 {
 		return 'http://' . $this->_host . $path;
 	}
 	
+	protected function _getSidCookie() {
+	    return $this->_sessionId ? 'sid=' . $this->_sessionId : '';
+	}
+	
 	/**
 	 * Creates a new session with stored login/password if
 	 * there's no current session.
@@ -74,7 +76,7 @@ class Neufbox4 {
 	 * @param boolean $force
 	 */
 	protected function _login($force = false) {
-		if ($force || !$this->_sessionId || !$this->_cookie) {
+		if ($force || !$this->_sessionId) {
 			
 			///////////////////
 			// 1. Retrieve challenge (session ID)
@@ -117,18 +119,17 @@ class Neufbox4 {
 						'password' => '',
 						'zsid' => $this->_sessionId,
 					),
-					null,
-					'zsid=' . $this->_sessionId
+					array('User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:30.0) Gecko/20100101 Firefox/30.0'),
+					$this->_getSidCookie()
 				);
 			}
 			catch (Exception $e) {
 				self::throwException("Cannot log in: authentication request failed. ({$e->getMessage()})");
 			}
 			
-			if (!isset($res['headers']['Set-Cookie'])) {
+			if ($res['info']['http_code'] == 401) {
 				self::throwException("Cannot log in: invalid login/password?");
 			}
-			$this->_cookie = $res['headers']['Set-Cookie'];
 			
 			$this->log('Login successful! Session ID: ' . $this->_sessionId, self::LOG_DEBUG);
 		}
@@ -175,11 +176,12 @@ class Neufbox4 {
 		
 		// Headers
 		if (is_array($headers)) {
-			curl_setopt($this->_curl, CURLOPT_HTTPHEADER, $headers);
+		    $headers[] = 'Connection: keep-alive';
 		}
 		else {
-			curl_setopt($this->_curl, CURLOPT_HTTPHEADER, array());
+			$headers = array('Connection: keep-alive');
 		}
+		curl_setopt($this->_curl, CURLOPT_HTTPHEADER, $headers);
 		
 		// Prepare GET/POST fields
 		$dataFields = array();
@@ -248,21 +250,21 @@ class Neufbox4 {
 	 * @throws Exception if the request failed.
 	 */
 	protected function _sendRequest($path = '/', $method = 'get', $data = array(), $headers = null) {
-		if (!$this->_sessionId || !$this->_cookie) {
+		if (!$this->_sessionId) {
 			$this->log("No session, initializing...", self::LOG_DEBUG);
 			$this->_login();
 		}
-		$res = $this->_sendRawRequest($path, $method, $data, $headers, $this->_cookie);
+		$res = $this->_sendRawRequest($path, $method, $data, $headers, $this->_getSidCookie());
 		
 		// Redirect means that session is invalid
-		if ($res['info']['http_code'] == 302 || false !== strpos($res['body'], 'access_lock')) {
+		if (in_array($res['info']['http_code'], array(302, 401)) || false !== strpos($res['body'], 'access_lock')) {
 			$this->log("Session lost, attempting to renew...", self::LOG_DEBUG);
 			
 			// Force new login
 			$this->_login(true);
 			
 			// Then try the original request again
-			$res = $this->_sendRawRequest($path, $method, $data, $headers, $this->_cookie);
+			$res = $this->_sendRawRequest($path, $method, $data, $headers, $this->_getSidCookie());
 			if ($res['info']['http_code'] != 200) {
 				self::throwException('Cannot reconnect to Neufbox. Aborting');
 			}
@@ -293,7 +295,6 @@ class Neufbox4 {
 	public function logout() {
 		$this->log('Logging out');
 		$this->_sessionId = null;
-		$this->_cookie = null;
 	}
 	
 	protected function _resetCurl() {
@@ -1203,7 +1204,13 @@ class Neufbox4 {
          $fields = explode("\r\n", preg_replace('/\x0D\x0A[\x09\x20]+/', ' ', $rawHeaders));
          foreach( $fields as $field ) {
              if( preg_match('/([^:]+): (.+)/m', $field, $match) ) {
-                 $match[1] = preg_replace('/(?<=^|[\x09\x20\x2D])./e', 'strtoupper("\0")', strtolower(trim($match[1])));
+                 /* @deprecated after PHP 5.5.0 */
+                 //$match[1] = preg_replace('/(?<=^|[\x09\x20\x2D])./e', 'strtoupper("\0")', strtolower(trim($match[1])));
+                 $match[1] = preg_replace_callback(
+                     '/(?<=^|[\x09\x20\x2D])./',
+                     array('Neufbox4', '_headerReplaceCallback'),
+                     strtolower(trim($match[1]))
+                 );
                  if( isset($retVal[$match[1]]) ) {
                      if (!is_array($retVal[$match[1]])) {
                          $retVal[$match[1]] = array($retVal[$match[1]]);
@@ -1215,6 +1222,10 @@ class Neufbox4 {
              }
          }
          return $retVal;
+	}
+	
+	protected static function _headerReplaceCallback($str) {
+	    return strtoupper($str[0]);
 	}
 	
 	/**

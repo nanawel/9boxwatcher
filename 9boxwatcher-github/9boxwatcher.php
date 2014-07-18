@@ -36,14 +36,16 @@ $usage = 'php -f ' . basename(__FILE__) . " -- \\\n\t"
 	. "                 disablehotspot|adslinfo ] \\\n\t"
 	. "[ -o | --output human(default)|script|csv ] \\\n\t"
 	. "[ -s | --silent-success ] \\\n\t"
-	. "[ -m | --mutex ]";
+	. "[ -m | --mutex ] \\\n\t"
+	. "[ -d | --debug ]";
 $longopts  = array(
 	'action:',
 	'output:',
 	'silent-success',
 	'mutex',
+	'debug',
 );
-$options = getopt('a:sm', $longopts);
+$options = getopt('a:smd', $longopts);
 
 // Process action argument
 if (!isset($options['action']) && !isset($options['a'])) {
@@ -87,6 +89,9 @@ if (isset($options['silent-success']) || isset($options['s'])) {
 // Process mutex argument
 $mutex = (isset($options['mutex']) || isset($options['m'])) ? true : false;
 
+// Debug
+$debug = (isset($options['debug']) || isset($options['d'])) ? true : false;
+
 
 /*
  * Now do the real job
@@ -118,8 +123,14 @@ if ($silentSuccess) {
 else {
 	$neufbox = new Neufbox4(NEUFBOX_HOST);
 }
+
 if (!NEUFBOX_PASSWORD) {
 	die("Missing password in configuration.\nPlease edit config.inc.php and fill the value NEUFBOX_PASSWORD.\n");
+}
+
+if ($debug) {
+    $neufbox->debug = $debug;
+    $neufbox->logLevel = Neufbox4::LOG_DEBUG;
 }
 $neufbox->login(NEUFBOX_LOGIN, NEUFBOX_PASSWORD);
 
